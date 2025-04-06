@@ -9,44 +9,57 @@ const PORT = process.env.PORT || 3000;
 // Directory where Swagger JSON files are stored
 const swaggerDir = path.join(__dirname, 'swagger');
 
-// Function to read all Swagger JSON files
-function getSwaggerSpecs() {
-    const specs = {};
+// Function to get list of available specs
+function getAvailableSpecs() {
     const files = fs.readdirSync(swaggerDir);
-    
-    files.forEach(file => {
-        if (file.endsWith('.json')) {
-            const specName = path.basename(file, '.json');
-            const spec = require(path.join(swaggerDir, file));
-            
-            // Check if it's Swagger 2.0 or OpenAPI 3.0
-            if (spec.swagger === '2.0') {
-                specs[specName] = spec;
-            } else if (spec.openapi && spec.openapi.startsWith('3.')) {
-                specs[specName] = spec;
-            } else {
-                console.warn(`Warning: ${file} is not a valid Swagger 2.0 or OpenAPI 3.0 specification`);
-            }
-        }
-    });
-    
-    return specs;
+    return files
+        .filter(file => file.endsWith('.json'))
+        .map(file => path.basename(file, '.json'));
+}
+
+// Function to read a spec file
+function readSpecFile(name) {
+    const filePath = path.join(swaggerDir, `${name}.json`);
+    if (!fs.existsSync(filePath)) {
+        return null;
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
 // Serve Swagger UI for each specification
-const specs = getSwaggerSpecs();
-Object.entries(specs).forEach(([name, spec]) => {
-    app.use(`/api-docs/${name}`, swaggerUi.serve, swaggerUi.setup(spec));
+const availableSpecs = getAvailableSpecs();
+availableSpecs.forEach(name => {
+    // Create a new router for each specification
+    const router = express.Router();
+    
+    // Serve the Swagger UI
+    router.use('/', swaggerUi.serve);
+    
+    // Setup Swagger UI with the spec
+    router.get('/', (req, res) => {
+        const spec = readSpecFile(name);
+        if (!spec) {
+            return res.status(404).send('Specification not found');
+        }
+        swaggerUi.setup(spec)(req, res);
+    });
+    
+    // Mount the router
+    app.use(`/api-docs/${name}`, router);
 });
 
 // Root endpoint to list all available APIs
 app.get('/', (req, res) => {
-    const apiList = Object.keys(specs).map(name => ({
-        name,
-        url: `/api-docs/${name}`,
-        title: specs[name].info?.title || name,
-        description: specs[name].info?.description || 'No description available'
-    }));
+    const apiList = availableSpecs.map(name => {
+        const spec = readSpecFile(name);
+        return {
+            name,
+            url: `/api-docs/${name}`,
+            title: spec?.info?.title || name,
+            description: spec?.info?.description || 'No description available',
+            version: spec?.info?.version || 'N/A'
+        };
+    });
     
     const html = `
     <!DOCTYPE html>
@@ -110,7 +123,7 @@ app.get('/', (req, res) => {
                 <li class="api-item">
                     <h2>${api.title}</h2>
                     <p>${api.description}</p>
-                    <p class="version">Version: ${specs[api.name].info?.version || 'N/A'}</p>
+                    <p class="version">Version: ${api.version}</p>
                     <a href="${api.url}" class="api-link">View Documentation</a>
                 </li>
             `).join('')}
@@ -125,7 +138,7 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
     console.log('Available API Documentation:');
-    Object.keys(specs).forEach(name => {
+    availableSpecs.forEach(name => {
         console.log(`- ${name}: http://localhost:${PORT}/api-docs/${name}`);
     });
 }); 
